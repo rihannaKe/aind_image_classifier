@@ -13,11 +13,20 @@ def arg_parser():
     parser.add_argument('--data_dir', action="store", default="./flowers")
     parser.add_argument('--save_dir', action="store", default="./checkpoint.pth")
     parser.add_argument('--device', action="store", default="gpu")
+    parser.add_argument('--model_struct', action="store", default="vgg16", dest="model_struct")
+    parser.add_argument('--learning_rate', action="store", type=float, default=0.001)
+    parser.add_argument('--hidden_units', action="store", dest="hidden_units", type=int, default=256)
+    parser.add_argument('--epochs', action="store", default=3, type=int)
+
     args = parser.parse_args()
     return {
         'data_dir': args.data_dir,
         'save_dir': args.save_dir,
-        'device': args.device
+        'device': args.device,
+        'model_struct': args.model_struct,
+        'learning_rate': args.learning_rate,
+        'hidden_units': args.hidden_units,
+        'epochs': args.epochs
     }
 
 
@@ -67,22 +76,27 @@ def load_dataset():
 
     return image_datasets, dataloaders
 
-def model_setup(device, lr=0.001):
+def model_setup(device, model_struct, lr, hidden_layer):
     '''
     Setup for building the model
     '''
-    model = models.vgg16(pretrained=True)
+    if model_struct == 'alexnet':
+        model = models.alexnet(pretrained=True)
+    else:
+        model = models.vgg16(pretrained=True)
+
     for param in model.parameters():
         param.requires_grad = False
 
     model.classifier = nn.Sequential(OrderedDict([
         ('fc1', nn.Linear(25088, 2048)),
         ('relu', nn.ReLU()),
-        ('fc2', nn.Linear(2048, 256)),
+        ('fc2', nn.Linear(2048, hidden_layer)),
         ('relu', nn.ReLU()),
-        ('fc3', nn.Linear(256, 102)),
+        ('fc3', nn.Linear(hidden_layer, 102)),
         ('output', nn.LogSoftmax(dim=1))
     ]))
+
     model = model.to(device)
     criterion = nn.NLLLoss()
     optimizer = optim.Adam(model.classifier.parameters(), lr)
@@ -167,13 +181,18 @@ if __name__ == "__main__":
 
     image_datasets, dataloaders = load_dataset()
 
-    model, criterion, optimizer = model_setup(device)
+    model_struct = training_args['model_struct']
+    lr = training_args['learning_rate']
+    hidden_layer = training_args['hidden_units']
+    epochs = training_args['epochs']
+    saving_path = training_args['save_dir']
 
-    epochs = 3
+    model, criterion, optimizer = model_setup(device,  model_struct, lr, hidden_layer)
+
     train_model(dataloaders, model, criterion, device, epochs)
 
     model_validation(dataloaders, model, criterion, device)
 
-    save_checkpoint(model, image_datasets['train'], 'checkpoint.pth')
+    save_checkpoint(model, image_datasets['train'], saving_path)
 
 
