@@ -80,8 +80,8 @@ def model_setup(device, model_struct, lr, hidden_layer):
     '''
     Setup for building the model
     '''
-    if model_struct == 'alexnet':
-        model = models.alexnet(pretrained=True)
+    if model_struct == 'resnet152':
+        model = models.resnet152(pretrained=True)
     else:
         model = models.vgg16(pretrained=True)
 
