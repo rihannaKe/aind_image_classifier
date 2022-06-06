@@ -10,24 +10,14 @@ from collections import OrderedDict
 
 def arg_parser():
     parser = argparse.ArgumentParser(description="Parser for train.py")
-    parser.add_argument('data_dir', action="store", default="./flowers")
+    parser.add_argument('--data_dir', action="store", default="./flowers")
     parser.add_argument('--save_dir', action="store", default="./checkpoint.pth")
-    parser.add_argument('--arch', action="store", default="vgg16")
-    parser.add_argument('--learning_rate', action="store", type=float, default=0.001)
-    parser.add_argument('--hidden_units', action="store", dest="hidden_units", type=int, default=512)
-    parser.add_argument('--epochs', action="store", default=3, type=int)
-    parser.add_argument('--dropout', action="store", type=float, default=0.2)
-    parser.add_argument('--gpu', action="store", default="gpu")
+    parser.add_argument('--device', action="store", default="gpu")
     args = parser.parse_args()
     return {
         'data_dir': args.data_dir,
-        'path': args.save_dir,
-        'learning_rate': args.learning_rate,
-        'struct': args.arch,
-        'hidden_units': args.hidden_units,
-        'powered': args.gpu,
-        'epochs': args.epochs,
-        'dropout': args.dropout
+        'save_dir': args.save_dir,
+        'device': args.device
     }
 
 
@@ -77,7 +67,7 @@ def load_dataset():
 
     return image_datasets, dataloaders
 
-def model_setup(lr=0.001):
+def model_setup(device, lr=0.001):
     '''
     Setup for building the model
     '''
@@ -93,95 +83,65 @@ def model_setup(lr=0.001):
         ('fc3', nn.Linear(256, 102)),
         ('output', nn.LogSoftmax(dim=1))
     ]))
-    model = model.to('cuda')
+    model = model.to(device)
     criterion = nn.NLLLoss()
     optimizer = optim.Adam(model.classifier.parameters(), lr)
 
     return model, criterion, optimizer
 
-def build_and_train_model(dataloaders, model, criterion, optimizer):
-    '''
-    Builds and tranins the model
-    '''
-    epochs = training_args['epochs']
-    print_every = 5
-    steps = 0
-
-    print("--Training starting--")
-    for e in range(epochs):
-        running_loss = 0
-        for inputs, labels in dataloaders['train']:
-            steps += 1
-
-            inputs, labels = inputs.to('cuda'), labels.to('cuda')
-
-            # Clean existing gradients
-            optimizer.zero_grad()
-            # Forward pass - compute outputs on input data using the model
-            outputs = model.forward(inputs)
-            # Compute loss
-            loss = criterion(outputs, labels)
-            # Backpropagate the gradients
-            loss.backward()
-            # Update the parameters
-            optimizer.step()
-            # Compute the total loss for the batch and add it to running_loss
-            running_loss += loss.item()
-
-            if steps % print_every == 0:
-                model.eval()
-                valid_loss = 0
-                accuracy = 0
-                with torch.no_grad():
-                    for inputs, labels in dataloaders['valid']:
-                        inputs, labels = inputs.to('cuda'), labels.to('cuda')
-
-                        log_ps = model.forward(inputs)
-                        batch_loss = criterion(log_ps, labels)
-                        valid_loss += batch_loss.item()
-
-                        ps = torch.exp(log_ps)
-                        top_p, top_class = ps.topk(1, dim=1)
-                        equals = top_class == labels.view(*top_class.shape)
-                        accuracy += torch.mean(equals.type(torch.FloatTensor)).item()
-                print(f"Epoch {e + 1}/{epochs}.. "
-                      f"Loss: {running_loss / print_every:.3f}.. "
-                      f"Validation Loss: {valid_loss / len(dataloaders['valid']):.3f}.. "
-                      f"Accuracy: {accuracy / len(dataloaders['valid']):.3f}")
-                running_loss = 0
-                model.train()
-    print("--Training ended--")
-
-def validate_model(dataloaders, model, criterion):
-    '''
-    Validates the model
-    '''
-    test_loss = 0
-    accuracy = 0
-
-    print("--Starting model validation --")
+def model_validation(dataset, model, criterion, device):
+    model.eval()
+    accuracy = 0.0
+    valid_loss = 0.0
     with torch.no_grad():
-        for inputs, labels in dataloaders['test']:
-            inputs, labels = inputs.to('cuda'), labels.to('cuda')
+        for inputs, labels in dataset:
+            inputs, labels = inputs.to(device), labels.to(device)
 
-            log_ps = model.forward(inputs)
+            log_ps = model(inputs)
             batch_loss = criterion(log_ps, labels)
-
-            test_loss += batch_loss.item()
+            valid_loss += batch_loss.item()
 
             ps = torch.exp(log_ps)
             top_p, top_class = ps.topk(1, dim=1)
             equals = top_class == labels.view(*top_class.shape)
             accuracy += torch.mean(equals.type(torch.FloatTensor)).item()
 
-    print(f"Test accuracy: {accuracy / len(dataloaders['test']):.3f}")
-    print("--Model validation ended--")
+    return valid_loss / len(dataset), accuracy / len(dataset)
+
+def train_model(dataloaders, model, criterion, device, epochs):
+    print_steps = 5
+
+    print(f'--- model training started ---')
+    for e in range(epochs):
+        running_loss = 0
+        for i, (inputs, labels) in enumerate(dataloaders['train'], 0):
+
+            inputs, labels = inputs.to(device), labels.to(device)
+
+            optimizer.zero_grad()
+
+            # Forward pass + compute loss + backward
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            # Compute total loss and print statistics
+            running_loss += loss.item()
+            if i % print_steps == 0:
+                valid_loss, accuracy = model_validation(dataloaders['valid'], model, criterion, device)
+                print(f"Epoch {e + 1}/{epochs}.. "
+                      f"Loss: {running_loss / print_steps:.3f}.. "
+                      f"Validation Loss: {valid_loss:.3f}.. "
+                      f"Accuracy: {accuracy:.3f}")
+                running_loss = 0
+                model.train()
+    print(f'--- model training ended ---')
 
 def save_checkpoint(model, img_dataset, name):
     model.class_to_idx = img_dataset.class_to_idx
     torch.save({'input_size': 25088,
                 'output_size': 102,
-                'structure': 'vgg16',
                 'learning_rate': 0.001,
                 'classifier': model.classifier,
                 'epochs': training_args['epochs'],
@@ -195,7 +155,7 @@ if __name__ == "__main__":
     global training_args
     training_args = arg_parser()
 
-    if torch.cuda.is_available() and training_args['powered'] == 'gpu':
+    if torch.cuda.is_available() and training_args['device'] == 'gpu':
         device = torch.device("cuda:0")
     else:
         device = torch.device("cpu")
@@ -206,10 +166,13 @@ if __name__ == "__main__":
     test_dir = data_dir + '/test'
 
     image_datasets, dataloaders = load_dataset()
-    model, criterion, optimizer = model_setup(training_args['learning_rate'])
 
-    build_and_train_model(dataloaders, model, criterion, optimizer)
-    validate_model(dataloaders, model, criterion)
+    model, criterion, optimizer = model_setup(device)
+
+    epochs = 3
+    train_model(dataloaders, model, criterion, device, epochs)
+
+    model_validation(dataloaders, model, criterion, device)
 
     save_checkpoint(model, image_datasets['train'], 'checkpoint.pth')
 

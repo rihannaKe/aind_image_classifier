@@ -10,18 +10,16 @@ from train import model_setup
 
 def arg_parser():
     parser = argparse.ArgumentParser(description="predict.py")
-    parser.add_argument('--image',type=str,help='Point to impage file for prediction.',required=True)
-    parser.add_argument('--checkpoint',type=str,help='Point to checkpoint file as str.',required=True)
-    parser.add_argument('--top_k',type=int, help='Choose top K matches as int.', default=3)
-    parser.add_argument('--category_names', dest="category_names", action="store", default='cat_to_name.json')
-    parser.add_argument('--gpu', default="gpu", action="store", dest="gpu")
+    parser.add_argument('--image', action="store", required=True)
+    parser.add_argument('--checkpoint', action="store", default="checkpoint.pth")
+    parser.add_argument('--device', action="store", default="gpu", dest="device")
+    parser.add_argument('--top_k', action="store", default=5)
+
     args = parser.parse_args()
     return {
         'image': args.image,
         'checkpoint': args.checkpoint,
-        'top_k': args.top_k,
-        'category_names': args.category_names,
-        'powered': args.gpu
+        'device': args.device,
     }
 
 
@@ -33,9 +31,6 @@ def loading_checkpoint(model, path):
 
 
 def process_image(image):
-    ''' Scales, crops, and normalizes a PIL image for a PyTorch model,
-        returns an Numpy array
-    '''
     img_pil = PIL.Image.open(image)
     img_transforms = transforms.Compose([transforms.Resize(256),
                                          transforms.CenterCrop(224),
@@ -48,39 +43,30 @@ def process_image(image):
     return image
 
 
-def predict(image_path, model, topk=5):
+def predict(image_path, model, device, topk=5):
     ''' Predict the class (or classes) of an image using a trained deep learning model.
     '''
+    model.to(device)
+    model.eval()
 
-    # TODO: Implement the code to predict the class from an image file
+    with torch.no_grad():
+        img = process_image(image_path)
+        img = img.unsqueeze(0)
+        img = img.type(torch.FloatTensor)
+        img = img.to(device)
 
-    model.to("cpu")
+        out = model(img)
+        ps = torch.exp(out)
 
-    # Set model to evaluate
-    model.eval();
+        top_probs, top_labels = torch.topk(ps, topk)
 
-    # Convert image from numpy to torch
-    torch_image = torch.from_numpy(np.expand_dims(process_image(image_path),
-                                                  axis=0)).type(torch.FloatTensor).to("cpu")
+        idx_to_class = {val: key for key, val in
+                        model.class_to_idx.items()}
 
-    # Find probabilities (results) by passing through the function (note the log softmax means that its on a log scale)
-    log_probs = model.forward(torch_image)
-
-    # Convert to linear scale
-    linear_probs = torch.exp(log_probs)
-
-    # Find the top 5 results
-    top_probs, top_labels = linear_probs.topk(topk)
-
-    # Detatch all of the details
-    top_probs = np.array(top_probs.detach())[0]
-    top_labels = np.array(top_labels.detach())[0]
-
-    # Convert to classes
-    idx_to_class = {val: key for key, val in
-                    model.class_to_idx.items()}
-    top_labels = [idx_to_class[lab] for lab in top_labels]
-    top_flowers = [cat_to_name[lab] for lab in top_labels]
+        top_probs = [float(pb) for pb in top_probs[0]]
+        labels = [int(lb) for lb in top_labels[0]]
+        top_labels = [idx_to_class[lb] for lb in labels]
+        top_flowers = [cat_to_name[str(lab)] for lab in labels]
 
     return top_probs, top_labels, top_flowers
 
@@ -91,12 +77,17 @@ if __name__ == "__main__":
     with open('cat_to_name.json', 'r') as f:
         cat_to_name = json.load(f)
 
-    trained_model,_,_ = model_setup()
+    if torch.cuda.is_available() and predict_args['device'] == 'gpu':
+        device = torch.device("cuda:0")
+    else:
+        device = torch.device("cpu")
+
+    trained_model,_,_ = model_setup(device)
     model = loading_checkpoint(trained_model, predict_args['checkpoint'])
 
     image_tensor = process_image(predict_args['image'])
 
-    top_probs, top_labels, top_flowers = predict(image_tensor, model)
+    top_probs, top_labels, top_flowers = predict(image_tensor, model, device, predict_args.top_k)
 
     print(f'Probabilities: {top_probs}')
     print(f'Top labels: {top_labels}')

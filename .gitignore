@@ -1,4 +1,8 @@
 /flowers
 .idea
-checkpoint.pth
-__pycache__
+*.pth
+__pycache__/
+*.py[cod]
+*$py.class
+.idea
+.ipynb*s
